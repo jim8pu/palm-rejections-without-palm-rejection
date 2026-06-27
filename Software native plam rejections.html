@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Web Drawing Canvas with Palm Rejection</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; overflow: hidden;
+            width: 100vw; height: 100vh; background-color: #1a1a1a;
+        }
+        /* CRITICAL: Disables the browser's native panning/zooming behaviors */
+        canvas {
+            display: block;
+            touch-action: none; 
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="drawingCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('drawingCanvas');
+const ctx = canvas.getContext('2d');
+
+// Track active pointers on the screen
+const activePointers = new Map();
+
+// Resize canvas to match the browser window
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// PALM CLASSIFIER THRESHOLDS (Tuned for Web Pixels)
+const PALM_AREA_THRESHOLD = 300; // width * height in pixels
+const PALM_RATIO_THRESHOLD = 1.7; // Long axis divided by short axis
+
+function checkIsPalm(event) {
+    const w = event.width || 1;
+    const h = event.height || 1;
+    const area = w * h;
+    const ratio = Math.max(w, h) / Math.min(w, h);
+
+    // If the touch area is physically massive or heavily stretched out, it's a palm
+    if (area > PALM_AREA_THRESHOLD || ratio > PALM_RATIO_THRESHOLD) {
+        return true;
+    }
+    return false;
+}
+
+// ─── EVENT LISTENERS ────────────────────────────────────────────────────────
+
+canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); // Stop native browser selection mechanics
+
+    if (checkIsPalm(e)) {
+        // Flag this specific pointer ID as garbage so we ignore it later
+        activePointers.set(e.pointerId, { type: 'PALM' });
+        return;
+    }
+
+    // It's a valid finger point! Track its starting coordinate
+    activePointers.set(e.pointerId, {
+        type: 'FINGER',
+        startX: e.clientX,
+        startY: e.clientY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        time: Date.now()
+    });
+
+    // Evaluate total VALID touch points to execute your rule matrix
+    evaluateGestureState(e, 'DOWN');
+});
+
+canvas.addEventListener('pointermove', (e) => {
+    const pointerData = activePointers.get(e.pointerId);
+    if (!pointerData || pointerData.type === 'PALM') return; // Silent discard
+
+    // Count how many total VALID fingers are currently processing actions
+    const validFingerCount = Array.from(activePointers.values()).filter(p => p.type === 'FINGER').length;
+
+    if (validFingerCount === 1) {
+        // RULE 1: Exactly 1 valid point = DRAW SMOOTH LINES
+        ctx.beginPath();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.moveTo(pointerData.lastX, pointerData.lastY);
+        ctx.lineTo(e.clientX, e.clientY);
+        ctx.stroke();
+
+        // Update tracking history
+        pointerData.lastX = e.clientX;
+        pointerData.lastY = e.clientY;
+    } else if (validFingerCount === 2) {
+        // RULE 2: 2 Fingers moving = PAN OR ZOOM MATRIX
+        // (You can drop your ScaleGesture/CanvasTransform matrices right here)
+    }
+});
+
+canvas.addEventListener('pointerup', (e) => {
+    evaluateGestureState(e, 'UP');
+    activePointers.delete(e.pointerId); // Remove tracking when finger lifts
+});
+
+canvas.addEventListener('pointercancel', (e) => {
+    activePointers.delete(e.pointerId); // Cleanup if OS steals the pointer
+});
+
+// ─── GESTURE EVALUATION ENGINE ──────────────────────────────────────────────
+
+function evaluateGestureState(event, stage) {
+    const validFingers = Array.from(activePointers.values()).filter(p => p.type === 'FINGER');
+    const fingerCount = validFingers.length;
+
+    if (stage === 'UP') {
+        const pData = activePointers.get(event.pointerId);
+        if (!pData || pData.type !== 'FINGER') return;
+
+        const duration = Date.now() - pData.time;
+        const quickTap = duration < 220; // 220 milliseconds threshold
+
+        if (quickTap) {
+            if (fingerCount === 2) {
+                console.log("🎯 TWO FINGER TAP DETECTED -> Triggering Canvas Undo!");
+                triggerUndoAnimation();
+            } else if (fingerCount === 3) {
+                console.log("🎯 THREE FINGER TAP DETECTED -> Triggering Canvas Redo!");
+                triggerRedoAnimation();
+            }
+        }
+    }
+}
+
+function triggerUndoAnimation() {
+    ctx.fillStyle = "rgba(255, 0, 0, 0.2)"; // Flash red transparent screen overlay
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function triggerRedoAnimation() {
+    ctx.fillStyle = "rgba(0, 255, 0, 0.2)"; // Flash green transparent screen overlay
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+</script>
+
+</body>
+</html>
